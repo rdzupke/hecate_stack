@@ -1,0 +1,23 @@
+version: '3'
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      DOMAIN: "http://vw.zupke.xyz"
+      ROCKET_BASE: "/vw"
+      #WEB_VAULT_FOLDER: "/vw" # this is only for web vaults
+      #CORS_ALLOWED_ORIGINS: "https://hdd-dev.local"
+    volumes:
+      - ./vw-data/:/data/
+    expose:
+      - "80"
+    networks:
+      - nginx-net
+
+networks:
+  nginx-net:
+    external: true
+

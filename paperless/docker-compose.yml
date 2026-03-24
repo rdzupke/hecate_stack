@@ -1,0 +1,67 @@
+# Docker Compose file for running paperless from the Docker Hub.
+# This file contains everything paperless needs to run.
+# Paperless supports amd64, arm and arm64 hardware.
+#
+# All compose files of paperless configure paperless in the following way:
+#
+# - Paperless is (re)started on system boot, if it was running before shutdown.
+# - Docker volumes for storing data are managed by Docker.
+# - Folders for importing and exporting files are created in the same directory
+#   as this file and mounted to the correct folders inside the container.
+# - Paperless listens on port 8000.
+#
+# SQLite is used as the database. The SQLite file is stored in the data volume.
+#
+# To install and update paperless with this file, do the following:
+#
+# - Copy this file as 'docker-compose.yml' and the files 'docker-compose.env'
+#   and '.env' into a folder.
+# - Run 'docker compose pull'.
+# - Run 'docker compose up -d'.
+#
+# For more extensive installation and update instructions, refer to the
+# documentation.
+
+services:
+  broker:
+    image: docker.io/library/redis:8
+    container_name: paperless_broker
+    restart: unless-stopped
+    networks:
+      - internal
+    volumes:
+      - redisdata:/data
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless
+    restart: unless-stopped
+    depends_on:
+      - broker
+    #ports:
+    #  - "8000:8000"
+    networks:
+      - internal
+      - nginx-net
+    volumes:
+      - ./data:/usr/src/paperless/data
+      - ./media:/usr/src/paperless/media
+      - ./export:/usr/src/paperless/export
+      - ./consume:/usr/src/paperless/consume
+    env_file: docker-compose.env
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_FILENAME_FORMAT_REMOVE_NONE: true
+      PAPERLESS_FILENAME_FORMAT: "{{ created_year }}/{{ created_month_name_short }}/{{ title }}"
+      PAPERLESS_DATE_ORDER: "MDY"
+      # turn this on to avoid issues when adding files via SMB
+      PAPERLESS_CONSUMER_POLLING: 10 #seconds
+volumes:
+  #data:
+  #media:
+  redisdata:
+
+networks:
+  internal:
+    name: paperless_internal # redundant but explicit, docker will prepend 'paperless_' to 'internal'
+  nginx-net:
+    external: true

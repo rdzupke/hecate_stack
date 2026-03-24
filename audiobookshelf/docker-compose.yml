@@ -1,0 +1,21 @@
+services:
+  audiobookshelf:
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    #ports:
+    #  - 13378:80
+    restart: unless-stopped
+    volumes:
+      - ./data/audiobooks:/audiobooks
+      - ./data/books:/books
+      - ./data/podcasts:/podcasts
+      - ./data/config:/config
+      - ./data/metadata:/metadata
+    networks:
+      - nginx-net
+    environment:
+      - TZ=America/Los_Angeles
+
+networks:
+  nginx-net:
+    external: true

@@ -1,0 +1,4 @@
+.env
+config/assets
+*.bak
+data

@@ -1,0 +1,26 @@
+services:
+  app:
+    image: ghcr.io/hargata/lubelogger:latest
+    build: .
+    restart: unless-stopped
+    container_name: lubelogger
+    # volumes used to keep data persistent
+    volumes:
+      - ./data:/App/data
+      - ./keys:/root/.aspnet/DataProtection-Keys
+    # expose port and/or use serving via traefik
+    # leave this commented out if using docker networking
+    #ports:
+    #  - 8080:8080
+    env_file:
+      - .env
+    networks:
+      - nginx-net
+
+networks:
+  nginx-net:
+    external: true
+
+volumes:
+  data:
+  keys:

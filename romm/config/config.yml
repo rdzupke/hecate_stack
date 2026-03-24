@@ -1,0 +1,58 @@
+emulatorjs:
+  cache_limit: null
+  controls: {}
+  debug: false
+  settings: {}
+exclude:
+  platforms: []
+  roms:
+    multi_file:
+      names: []
+      parts:
+        extensions: []
+        names: []
+    single_file:
+      extensions: []
+      names:
+      - .DS_Store
+filesystem:
+  firmware_folder: bios
+  roms_folder: roms
+scan:
+  priority:
+    artwork:
+    - igdb
+    - moby
+    - ss
+    - ra
+    - launchbox
+    - gamelist
+    - hasheous
+    - tgdb
+    - flashpoint
+    - hltb
+    language:
+    - en
+    - fr
+    metadata:
+    - igdb
+    - moby
+    - ss
+    - ra
+    - launchbox
+    - gamelist
+    - hasheous
+    - tgdb
+    - flashpoint
+    - hltb
+    region:
+    - us
+    - wor
+    - ss
+    - eu
+    - jp
+system:
+  platforms:
+    famicom-disk-system: fds
+    neo-geo: neo-geo-x
+  versions: {}

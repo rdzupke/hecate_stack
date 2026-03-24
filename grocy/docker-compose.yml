@@ -1,0 +1,21 @@
+---
+services:
+  grocy:
+    image: lscr.io/linuxserver/grocy:latest
+    container_name: grocy
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./config:/config
+    #ports:
+    #  - 9283:80
+    networks:
+      - nginx-net
+    restart: unless-stopped
+
+networks:
+  nginx-net:
+    external: true
+

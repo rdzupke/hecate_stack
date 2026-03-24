@@ -1,0 +1,35 @@
+services:
+  mealie:
+#    image: ghcr.io/mealie-recipes/mealie:v3.0.2 # check version
+    image: ghcr.io/mealie-recipes/mealie:latest
+    container_name: mealie
+    restart: always
+    #ports:
+    #    - "9925:9000"
+    networks:
+        - nginx-net
+    deploy:
+      resources:
+        limits:
+          memory: 1000M #
+    volumes:
+      #- mealie-data:/app/data/
+      - ./data:/app/data/
+    environment:
+      # Set Backend ENV Variables Here
+      ALLOW_SIGNUP: "false"
+      PUID: 1000
+      PGID: 1000
+      TZ: America/Los_Angeles
+      BASE_URL: https://mealie.zupke.xyz
+      # Ollama integration needs some more effort
+      #OPENAI_BASE_URL: http://192.168.0.228:11434/v1
+      #OPENAI_API_KEY: thisisatestkeythatultimatelydoesnotmattertoOLLAMA
+      #OPENAI_MODEL: mistral-nemo
+
+#volumes:
+  #mealie-data:
+
+networks:
+  nginx-net:
+    external: true
