@@ -13,8 +13,8 @@ services:
       - REDIS_URL=redis://redis:6379
     volumes:
       - ./db:/yamtrack/db
-    #ports:
-      #- "8000:8000"
+    ports:
+      - "8000:8000" # leave this open even with docker networking for Plex webhooks
     networks:
       - yamtrack-internal
       - nginx-net

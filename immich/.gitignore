@@ -1,0 +1,8 @@
+# Security: Exclude secrets
+.env
+
+# Database data: Do not track Postgres files
+/postgres/
+
+# Media storage: Do not track uploads, thumbnails, or backups
+/library/
