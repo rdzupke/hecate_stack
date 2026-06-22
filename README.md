@@ -11,6 +11,7 @@ The Hecate Stack is a collection of Docker-based services that are orchestrated 
 ## Services Included
 
 - **nginxpm**: Nginx Proxy Manager for reverse proxy and SSL termination
+- **cloudflared**: External access via Cloudflare Tunnel
 - **paperless**: Document management system for scanning and organizing documents
 - **memos**: A note-taking application
 - **romm**: Game library management system
@@ -18,14 +19,14 @@ The Hecate Stack is a collection of Docker-based services that are orchestrated 
 - **linkwarden**: Bookmark manager
 - **audiobookshelf**: Audiobook management system
 - **mealie**: Recipe management system
+- **open-webui**: Web UI for AI/LLM interactions (Ollama)
 - **vaultwarden**: Password manager (Bitwarden server)
 - **tubearchivist**: YouTube archiving and management
+- **immich**: Photo and media management
 - **lubelogger**: Vehicle maintenance tracking
 - **uptime-kuma**: Monitoring system
-- **yamtrack**: Possibly a tracking system
-- **airtrail**: Possibly a tracking system
-- **termix**: Terminal-based tools
-- **dev/**: Development tools and applications
+- **yamtrack**: Tracking system
+- **airtrail**: Tracking system
 
 ## Architecture
 
