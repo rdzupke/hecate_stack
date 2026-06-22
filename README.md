@@ -28,6 +28,77 @@ The Hecate Stack is a collection of Docker-based services that are orchestrated 
 - **yamtrack**: Tracking system
 - **airtrail**: Tracking system
 
+## NAS Mount Setup (macOS)
+
+This repository uses services that rely on `/Volumes/home` and `/Volumes/Plex` being
+mounted from a Synology NAS. These are mounted automatically via a macOS LaunchAgent
+plus shell script pair located in the `setup/` directory.
+
+### Prerequisites
+
+- macOS with `nc` (netcat) available
+- A Synology NAS accessible on your network (default: `ds220plus.local`)
+
+### Installation
+
+**1. Store NAS credentials in the macOS Keychain**
+
+Unlock your keychain if needed, then run:
+
+```bash
+security add-internet-password -U -a "rdzupke" -s "ds220plus.local" -r "smb " -w "yourpassword"
+```
+
+- `-a` = keychain account (NAS username)
+- `-s` = server name (NAS hostname)
+- `-r "smb "` = resource type (must include trailing space for SMB)
+- `-w` = password (omit to be prompted)
+
+**2. Install the LaunchAgent plist**
+
+Copy the plist to your LaunchAgents directory and update the script path:
+
+```bash
+cp setup/com.local.mount-nas.plist ~/Library/LaunchAgents/com.local.mount-nas.plist
+```
+
+Edit `~/Library/LaunchAgents/com.local.mount-nas.plist` and replace
+`REPLACE_WITH_PATH_TO` with the absolute path to this repository (e.g.,
+`/Users/rdzupke/git/rdzupke/hecate_stack`).
+
+**3. Load the LaunchAgent**
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.local.mount-nas.plist
+```
+
+This will:
+- Mount NAS shares immediately (`RunAtLoad: true`)
+- Re-check and re-mount every 60 seconds to recover from network interruptions
+- Log output to `/tmp/mount-nas.out` and `/tmp/mount-nas.err`
+
+**4. Allow Keychain access**
+
+The first time the script runs, macOS will prompt you to allow it access to the
+Keychain entry. Click **"Always Allow"** so future runs (including via LaunchAgent)
+work without interaction.
+
+### Configuration
+
+Edit the following files in `setup/` to match your setup:
+
+- **`com.local.mount-nas.plist`** — update the script path placeholder
+- **`mount-nas-shares.sh`** — update `ds220plus.local`, the username (`rdzupke`),
+  and keychain account name to match your NAS
+
+### Important Notes
+
+- **Do NOT pre-create** mount point directories for `/Volumes/home` or `/Volumes/Plex`
+  — macOS manages these automatically. Pre-creating them causes macOS to append a
+  `-1` suffix, which breaks the mount detection logic.
+- When run via LaunchAgent (non-interactive), all output is suppressed. Use the
+  log files at `/tmp/mount-nas.out` and `/tmp/mount-nas.err` for debugging.
+
 ## Architecture
 
 The repository follows a consistent pattern where:
