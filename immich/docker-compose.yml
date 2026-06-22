@@ -20,6 +20,8 @@ services:
       # Do not edit the next line. If you want to change the media storage location on your system, edit the value of UPLOAD_LOCATION in the .env file
       - ${UPLOAD_LOCATION}:/data
       - /etc/localtime:/etc/localtime:ro
+      - "/Volumes/home/Photos/Family Photos:/external_data/Family Photos:ro"
+      - "/Volumes/home/Photos/MobileBackup:/external_data/Synology Backup:ro"
     env_file:
       - .env
     ports:
@@ -30,6 +32,9 @@ services:
     restart: always
     healthcheck:
       disable: false
+    networks:
+      - nginx-net
+      - immich-net
 
   immich-machine-learning:
     container_name: immich_machine_learning
@@ -46,6 +51,8 @@ services:
     restart: always
     healthcheck:
       disable: false
+    networks:
+      - immich-net
 
   redis:
     container_name: immich_redis
@@ -53,6 +60,8 @@ services:
     healthcheck:
       test: redis-cli ping || exit 1
     restart: always
+    networks:
+      - immich-net
 
   database:
     container_name: immich_postgres
@@ -71,6 +80,13 @@ services:
     restart: always
     healthcheck:
       disable: false
+    networks:
+      - immich-net
+
+networks:
+  immich-net:
+  nginx-net:
+    external: true
 
 volumes:
   model-cache:
