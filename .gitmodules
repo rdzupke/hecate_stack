@@ -1,3 +1,6 @@
 [submodule "vestaboard"]
 	path = vestaboard
 	url = git@github.com:rdzupke/vestaboard.git
+[submodule "whiskers"]
+	path = whiskers
+	url = git@github.com:rdzupke/whiskers.git
