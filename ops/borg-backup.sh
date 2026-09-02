@@ -1,10 +1,30 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────
-# borg-backup-hecate.sh — recurring backup direct to Hyperion
-# Run after borg-seed-hecate.sh + rsync have completed.
+# borg-backup.sh — recurring backup direct to Hyperion
+# Run after borg-seed.sh + rsync have completed.
 # Schedule via cron.
 # ─────────────────────────────────────────────
 set -euo pipefail
+
+# ── CLI Arguments ──────────────────────────────
+DRY_RUN=false
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run|-n)
+      DRY_RUN=true
+      ;;
+    --help|-h)
+      echo "Usage: $0 [--dry-run|-n]"
+      echo "  --dry-run, -n   Stop and restart running stacks to test lifecycle without running Borg backup"
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $arg"
+      echo "Usage: $0 [--dry-run|-n]"
+      exit 1
+      ;;
+  esac
+done
 
 # ── Configuration ─────────────────────────────
 REMOTE_REPO="rdzupke@100.68.245.122:/Volumes/My Book for Mac/borg-backup-hecate"
@@ -13,50 +33,70 @@ STACK_ROOT="$SOURCE_DIR"
 ARCHIVE_NAME="hecate-$(date +%Y-%m-%dT%H:%M)"
 BORG_PASSPHRASE_FILE="$HOME/.borg-passphrase"
 
-# ── Stack directories ──────────────────────────
-STACKS=(
-  "airtrail"
-  "audiobookshelf"
-  "beszel"
-  "cloudflared"
-  "grocy"
-  "homebox-sam"
-  "immich"
-  "linkwarden"
-  "lubelogger"
-  "mealie"
-  "memos"
-  "nginxpm"
-  "open-webui"
-  "paperless"
-  "romm"
-  "termix"
-  "uptime-kuma"
-  "vaultwarden"
-  "vestaboard"
-  "whiskers"
-  "yamtrack"
-)
-
 # ── Retention policy ───────────────────────────
 KEEP_DAILY=7
 KEEP_WEEKLY=4
 KEEP_MONTHLY=6
 
 # ─────────────────────────────────────────────
-export BORG_PASSPHRASE
-BORG_PASSPHRASE="$(cat "$BORG_PASSPHRASE_FILE")"
-export BORG_RSH="ssh -i $HOME/.ssh/borg_backup_key"
-export BORG_REMOTE_PATH="/opt/homebrew/bin/borg"
-export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
-
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "=== RUNNING IN DRY RUN MODE ==="
+  log "Stacks will be stopped and restarted, but Borg backup/prune/compact will be skipped."
+fi
+
+# ── Borg Environment Setup ─────────────────────
+if [[ "$DRY_RUN" == "false" ]]; then
+  if [[ ! -f "$BORG_PASSPHRASE_FILE" ]]; then
+    log "ERROR: Passphrase file not found at $BORG_PASSPHRASE_FILE"
+    exit 1
+  fi
+  export BORG_PASSPHRASE
+  BORG_PASSPHRASE="$(cat "$BORG_PASSPHRASE_FILE")"
+  export BORG_RSH="ssh -i $HOME/.ssh/borg_backup_key"
+  export BORG_REMOTE_PATH="/opt/homebrew/bin/borg"
+  export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+fi
 
 # ── Docker Desktop check ───────────────────────
 if ! docker info > /dev/null 2>&1; then
   log "ERROR: Docker Desktop is not running. Exiting."
   exit 1
 fi
+
+# ── Running stacks discovery ───────────────────
+get_running_stacks() {
+  local running=()
+  local dir name running_containers
+
+  shopt -s nullglob
+  for dir in "$STACK_ROOT"/*/; do
+    dir="${dir%/}"
+    name="$(basename "$dir")"
+
+    # Skip non-stack utility directories
+    [[ "$name" =~ ^(\.git|ops|dev|setup)$ ]] && continue
+
+    # Ensure it is a compose stack directory
+    if [[ ! -x "$dir/prod.sh" && ! -f "$dir/compose.yml" && ! -f "$dir/docker-compose.yml" ]]; then
+      continue
+    fi
+
+    # Check if there are any running containers for this stack
+    running_containers="$(docker ps --filter "label=com.docker.compose.project.working_dir=$dir" -q 2>/dev/null || true)"
+    if [[ -z "$running_containers" ]]; then
+      running_containers="$(docker ps --filter "label=com.docker.compose.project=$name" -q 2>/dev/null || true)"
+    fi
+
+    if [[ -n "$running_containers" ]]; then
+      running+=("$name")
+    fi
+  done
+  shopt -u nullglob
+
+  echo "${running[@]}"
+}
 
 # ── Stack up/down helpers ──────────────────────
 stack_down() {
@@ -112,12 +152,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── Stop all stacks ────────────────────────────
-log "Stopping all stacks..."
-for name in "${STACKS[@]}"; do
-  stack_down "$name"
-  STACKS_STOPPED+=("$name")
-done
+# ── Discover active stacks ─────────────────────
+log "Detecting currently running stacks..."
+RUNNING_STACKS=()
+read -r -a RUNNING_STACKS <<< "$(get_running_stacks)"
+
+if [[ ${#RUNNING_STACKS[@]} -eq 0 ]]; then
+  log "No running stacks detected."
+else
+  log "Found ${#RUNNING_STACKS[@]} running stack(s): ${RUNNING_STACKS[*]}"
+fi
+
+# ── Stop running stacks ────────────────────────
+if [[ ${#RUNNING_STACKS[@]} -gt 0 ]]; then
+  log "Stopping running stacks..."
+  for name in "${RUNNING_STACKS[@]}"; do
+    stack_down "$name"
+    STACKS_STOPPED+=("$name")
+  done
+fi
 
 # ── Verify containers are stopped ─────────────
 log "Verifying all containers stopped..."
@@ -129,34 +182,45 @@ if [[ -n "$RUNNING" ]]; then
 fi
 
 # ── Create archive ─────────────────────────────
-log "Creating remote archive $ARCHIVE_NAME..."
-borg create \
-  --compression zstd,3 \
-  --stats \
-  --filter AME \
-  "$REMOTE_REPO::$ARCHIVE_NAME" \
-  "$SOURCE_DIR"
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "[DRY RUN] Skipping Borg archive creation."
+else
+  log "Creating remote archive $ARCHIVE_NAME..."
+  borg create \
+    --compression zstd,3 \
+    --stats \
+    --filter AME \
+    "$REMOTE_REPO::$ARCHIVE_NAME" \
+    "$SOURCE_DIR"
 
-log "Archive created successfully."
+  log "Archive created successfully."
+fi
 
-# ── Restart stacks ─────────────────────────────
-log "Restarting all stacks..."
-for name in "${STACKS[@]}"; do
-  stack_up "$name"
-done
+# ── Restart previously running stacks ──────────
+if [[ ${#RUNNING_STACKS[@]} -gt 0 ]]; then
+  log "Restarting previously running stacks..."
+  for name in "${RUNNING_STACKS[@]}"; do
+    stack_up "$name"
+  done
+fi
 STACKS_STOPPED=()
 trap - EXIT
 
 # ── Prune + compact ────────────────────────────
-log "Pruning old archives..."
-borg prune \
-  --keep-daily="$KEEP_DAILY" \
-  --keep-weekly="$KEEP_WEEKLY" \
-  --keep-monthly="$KEEP_MONTHLY" \
-  --list \
-  "$REMOTE_REPO"
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "[DRY RUN] Skipping Borg prune and compact."
+  log "Dry run complete. All previously running stacks have been restarted."
+else
+  log "Pruning old archives..."
+  borg prune \
+    --keep-daily="$KEEP_DAILY" \
+    --keep-weekly="$KEEP_WEEKLY" \
+    --keep-monthly="$KEEP_MONTHLY" \
+    --list \
+    "$REMOTE_REPO"
 
-log "Compacting repo..."
-borg compact "$REMOTE_REPO"
+  log "Compacting repo..."
+  borg compact "$REMOTE_REPO"
 
-log "Backup complete."
+  log "Backup complete."
+fi
