@@ -129,6 +129,7 @@ The repository follows a consistent pattern where:
 - **Stopping services**: `docker compose down` in individual service directories
 - **Viewing logs**: `docker compose logs` in individual service directories
 - **Updating services**: `docker compose pull` followed by `docker compose up -d` in individual service directories
+- **Backups & Disaster Recovery**: Automated remote Borg backups are managed via scripts in `ops/`. See [ops/README.md](file:///Users/rdzupke/git/rdzupke/hecate_stack/ops/README.md) for full restoration and disaster recovery instructions.
 
 ## Security
 

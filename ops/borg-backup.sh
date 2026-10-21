@@ -163,6 +163,14 @@ else
   log "Found ${#RUNNING_STACKS[@]} running stack(s): ${RUNNING_STACKS[*]}"
 fi
 
+# ── Record container version checkpoints ───────
+if [[ ${#RUNNING_STACKS[@]} -gt 0 ]]; then
+  log "Recording container version checkpoints and image digests..."
+  python3 "$STACK_ROOT/ops/record-manifest.py" \
+    --archive-name "$ARCHIVE_NAME" \
+    --stack-root "$STACK_ROOT" || log "  WARNING: Failed to record container version checkpoints"
+fi
+
 # ── Stop running stacks ────────────────────────
 if [[ ${#RUNNING_STACKS[@]} -gt 0 ]]; then
   log "Stopping running stacks..."

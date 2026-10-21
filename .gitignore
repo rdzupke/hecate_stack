@@ -2,3 +2,9 @@
 .env
 .env.*
 *.env
+
+# Backup container version checkpoints
+BACKUP_VERSIONS.md
+backup-versions.json
+ops/backup-manifest.md
+ops/backup-manifest.json
