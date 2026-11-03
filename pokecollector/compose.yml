@@ -1,0 +1,101 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: pokemon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pokemon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: pokemon_tcg
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - internal
+    command:
+      - sh
+      - -c
+      - |
+        for legacy_pg_version_file in /var/lib/postgresql/PG_VERSION /var/lib/postgresql/data/PG_VERSION; do
+          if [ -s "$${legacy_pg_version_file}" ]; then
+            legacy_pg_version="$$(cat "$${legacy_pg_version_file}")"
+            if [ "$${legacy_pg_version}" != "18" ]; then
+              echo >&2 "ERROR: Found PostgreSQL $${legacy_pg_version} data in the postgres_data volume."
+              echo >&2 "Run ./scripts/upgrade-postgres-15-to-18.sh before starting PostgreSQL 18."
+              echo >&2 "Do not delete the volume; it is needed for the upgrade/rollback path."
+              exit 1
+            fi
+          fi
+        done
+        exec docker-entrypoint.sh postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pokemon -d pokemon_tcg"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ghcr.io/git-romer/pokecollector-backend:${POKECOLLECTOR_VERSION:-1.55.1}
+    container_name: pokemon-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://pokemon:${POSTGRES_PASSWORD:-changeme}@postgres:5432/pokemon_tcg
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      USER_MODE: ${USER_MODE:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      GEMINI_ALLOWED_MODELS: ${GEMINI_ALLOWED_MODELS:-}
+      OPENAI_SCANNER_ENABLED: ${OPENAI_SCANNER_ENABLED:-false}
+      OPENAI_PROVIDER_LABEL: ${OPENAI_PROVIDER_LABEL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      OPENAI_ALLOWED_MODELS: ${OPENAI_ALLOWED_MODELS:-}
+      OPENAI_API_KEY_REQUIRED: ${OPENAI_API_KEY_REQUIRED:-}
+      TCGDEX_SYNC_LANGUAGES: ${TCGDEX_SYNC_LANGUAGES:-en,de}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      PRE_UPGRADE_BACKUP_ENABLED: ${PRE_UPGRADE_BACKUP_ENABLED:-true}
+      PRE_UPGRADE_BACKUP_REQUIRED: ${PRE_UPGRADE_BACKUP_REQUIRED:-true}
+      PRE_UPGRADE_BACKUP_KEEP: ${PRE_UPGRADE_BACKUP_KEEP:-10}
+      POKEDEX_IMAGE_CACHE_DIR: /app/data/pokedex-images
+      SCAN_UPLOAD_DIR: /app/data/scan-uploads
+      SCAN_TRACE_DIR: ${SCAN_TRACE_DIR:-}
+      SCAN_TRACE_STORAGE_DIR: /app/data/scan-traces
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Lets OPENAI_BASE_URL reach a model running on the Docker host. Automatic on
+    # Docker Desktop, but Linux Docker Engine needs it stated.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backups:/app/backups
+      - ./data/auth:/app/data/auth
+      - ./data/pokedex-images:/app/data/pokedex-images
+      - ./data/scan-uploads:/app/data/scan-uploads
+      - ./data/scan-traces:/app/data/scan-traces
+    networks:
+      - internal
+      - nginx-net
+
+  frontend:
+    image: ghcr.io/git-romer/pokecollector-frontend:${POKECOLLECTOR_VERSION:-1.55.1}
+    container_name: pokemon-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      PUBLIC_MODE: ${PUBLIC_MODE:-false}
+    networks:
+      - nginx-net
+
+volumes:
+  postgres_data:
+
+networks:
+  internal:
+  nginx-net:
+    external: true
+

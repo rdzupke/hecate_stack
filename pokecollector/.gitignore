@@ -1,0 +1,5 @@
+# Local data directories
+data/
+
+# Environment file (contains secrets)
+.env
