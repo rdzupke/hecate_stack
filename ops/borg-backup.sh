@@ -41,6 +41,70 @@ KEEP_MONTHLY=6
 # ─────────────────────────────────────────────
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
+# ── Notify! push notifications ─────────────────
+# Credentials live outside the repo, in a file containing:
+#   NOTIFY_DEVICE_ID=...   (device or GRP group id)
+#   NOTIFY_TOKEN=...
+#   NOTIFY_ICON_URL=...    (optional; overrides the default icon below)
+# If the file is missing, notifications are silently skipped.
+NOTIFY_CREDS_FILE="$HOME/.notify-credentials"
+NOTIFY_URL="https://push.getnotifyapp.com/notify-json"
+NOTIFY_GROUP_TYPE="backups"
+NOTIFY_ICON_URL_DEFAULT="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/borg.png"
+
+# notify <title> <text> — best-effort; never fails or blocks the backup.
+notify() {
+  local title=$1 text=$2
+  [[ "$DRY_RUN" == "true" ]] && title="[DRY RUN] $title"
+  [[ -f "$NOTIFY_CREDS_FILE" ]] || return 0
+  (
+    # shellcheck disable=SC1090
+    source "$NOTIFY_CREDS_FILE"
+    [[ -n "${NOTIFY_DEVICE_ID:-}" && -n "${NOTIFY_TOKEN:-}" ]] || exit 0
+    payload="$(python3 -c 'import json,sys; print(json.dumps({"title": sys.argv[1], "text": sys.argv[2], "groupType": sys.argv[3], "iconUrl": sys.argv[4]}))' \
+      "$title" "$text" "$NOTIFY_GROUP_TYPE" "${NOTIFY_ICON_URL:-$NOTIFY_ICON_URL_DEFAULT}")"
+    curl -fsS --max-time 10 --retry 2 -X POST \
+      -H "Content-Type: application/json" \
+      -d "$payload" \
+      "$NOTIFY_URL/$NOTIFY_DEVICE_ID?token=$NOTIFY_TOKEN" > /dev/null
+  ) || log "  WARNING: failed to send Notify! notification"
+  return 0
+}
+
+# ── Exit handling: restart stacks + report failure ──
+# Runs on every exit (success or failure). Stacks are always restarted;
+# a failure notification is sent if the script exits non-zero.
+STACKS_STOPPED=()
+CURRENT_STEP="starting up"
+START_SECONDS=$SECONDS
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  local restart_failed=()
+  if [[ ${#STACKS_STOPPED[@]} -gt 0 ]]; then
+    log "Running cleanup — restarting stopped stacks..."
+    for name in "${STACKS_STOPPED[@]}"; do
+      stack_up "$name" || { log "  WARNING: failed to restart $name"; restart_failed+=("$name"); }
+    done
+  fi
+  if [[ $rc -ne 0 ]]; then
+    local msg="Failed during: $CURRENT_STEP (exit $rc, $(( SECONDS - START_SECONDS ))s)."
+    if [[ ${#STACKS_STOPPED[@]} -gt 0 ]]; then
+      if [[ ${#restart_failed[@]} -gt 0 ]]; then
+        msg+=" Could NOT restart: ${restart_failed[*]}."
+      else
+        msg+=" Stacks were restarted."
+      fi
+    fi
+    notify "Hecate backup FAILED" "$msg"
+  fi
+  exit $rc
+}
+trap on_exit EXIT
+
+notify "Hecate backup started" "Archive $ARCHIVE_NAME"
+
 if [[ "$DRY_RUN" == "true" ]]; then
   log "=== RUNNING IN DRY RUN MODE ==="
   log "Stacks will be stopped and restarted, but Borg backup/prune/compact will be skipped."
@@ -140,19 +204,8 @@ stack_up() {
   fi
 }
 
-# ── Ensure containers restart even if script fails ──
-STACKS_STOPPED=()
-cleanup() {
-  if [[ ${#STACKS_STOPPED[@]} -gt 0 ]]; then
-    log "Running cleanup — restarting stopped stacks..."
-    for name in "${STACKS_STOPPED[@]}"; do
-      stack_up "$name" || log "  WARNING: failed to restart $name"
-    done
-  fi
-}
-trap cleanup EXIT
-
 # ── Discover active stacks ─────────────────────
+CURRENT_STEP="discovering running stacks"
 log "Detecting currently running stacks..."
 RUNNING_STACKS=()
 read -r -a RUNNING_STACKS <<< "$(get_running_stacks)"
@@ -173,6 +226,7 @@ fi
 
 # ── Stop running stacks ────────────────────────
 if [[ ${#RUNNING_STACKS[@]} -gt 0 ]]; then
+  CURRENT_STEP="stopping stacks"
   log "Stopping running stacks..."
   for name in "${RUNNING_STACKS[@]}"; do
     stack_down "$name"
@@ -193,13 +247,19 @@ fi
 if [[ "$DRY_RUN" == "true" ]]; then
   log "[DRY RUN] Skipping Borg archive creation."
 else
+  CURRENT_STEP="borg create"
   log "Creating remote archive $ARCHIVE_NAME..."
+  BORG_LOG="$(mktemp)"
   borg create \
     --compression zstd,3 \
     --stats \
     --filter AME \
     "$REMOTE_REPO::$ARCHIVE_NAME" \
-    "$SOURCE_DIR"
+    "$SOURCE_DIR" 2>&1 | tee "$BORG_LOG"
+
+  # "This archive:  <orig>  <compressed>  <dedup>" line from --stats
+  ARCHIVE_STATS="$(grep -E '^This archive:' "$BORG_LOG" | head -1 | sed -E 's/ +/ /g' || true)"
+  rm -f "$BORG_LOG"
 
   log "Archive created successfully."
 fi
@@ -207,18 +267,20 @@ fi
 # ── Restart previously running stacks ──────────
 if [[ ${#RUNNING_STACKS[@]} -gt 0 ]]; then
   log "Restarting previously running stacks..."
+  CURRENT_STEP="restarting stacks"
   for name in "${RUNNING_STACKS[@]}"; do
     stack_up "$name"
   done
 fi
 STACKS_STOPPED=()
-trap - EXIT
 
 # ── Prune + compact ────────────────────────────
 if [[ "$DRY_RUN" == "true" ]]; then
   log "[DRY RUN] Skipping Borg prune and compact."
   log "Dry run complete. All previously running stacks have been restarted."
+  notify "Hecate backup dry run complete" "${#RUNNING_STACKS[@]} stack(s) stopped and restarted in $(( SECONDS - START_SECONDS ))s."
 else
+  CURRENT_STEP="borg prune (archive was created, stacks restarted)"
   log "Pruning old archives..."
   borg prune \
     --keep-daily="$KEEP_DAILY" \
@@ -227,8 +289,10 @@ else
     --list \
     "$REMOTE_REPO"
 
+  CURRENT_STEP="borg compact (archive was created, stacks restarted)"
   log "Compacting repo..."
   borg compact "$REMOTE_REPO"
 
   log "Backup complete."
+  notify "Hecate backup complete" "$ARCHIVE_NAME in $(( SECONDS - START_SECONDS ))s. ${#RUNNING_STACKS[@]} stack(s) restarted. ${ARCHIVE_STATS:-No stats available}"
 fi

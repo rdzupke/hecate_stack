@@ -13,6 +13,7 @@ Because this directory is located inside `/Users/rdzupke/git/rdzupke/hecate_stac
 - **Encryption:** `repokey-blake2` (authenticated encryption)
 - **SSH Key:** `~/.ssh/borg_backup_key`
 - **Passphrase Storage:** `~/.borg-passphrase`
+- **Push Notifications:** [Notify!](https://getnotifyapp.com) via `~/.notify-credentials` (see [Section 2C](#c-configure-push-notifications-notify))
 - **Archive Naming:** `hecate-YYYY-MM-DDTHH:MM`
 - **Retention Policy:**
   - Daily: 7
@@ -59,6 +60,47 @@ export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
 > unset BORG_RSH
 > unset BORG_REMOTE_PATH
 > ```
+
+### C. Configure Push Notifications (Notify!)
+
+`borg-backup.sh` sends iPhone push notifications through [Notify!](https://getnotifyapp.com) when a backup **starts**, **completes** (with duration and archive size stats), or **fails** (with the step that failed and whether stacks were restarted). `--dry-run` sends the same messages prefixed with `[DRY RUN]`, which makes it a safe way to test.
+
+**Setup:**
+
+1. Install Notify! on your iPhone and note your **device ID** (or a `GRP…` group ID to notify several devices) and **token**. Bambuddy's Notify provider settings use the same values.
+2. Create `~/.notify-credentials` on the host that runs the backup. This file lives **outside the repo** and must never be committed:
+
+   ```bash
+   cat > ~/.notify-credentials <<'EOF'
+   NOTIFY_DEVICE_ID=your-device-or-group-id
+   NOTIFY_TOKEN=your-token
+   # Optional: override the notification icon (any public PNG URL)
+   # NOTIFY_ICON_URL=https://example.com/icon.png
+   EOF
+   chmod 600 ~/.notify-credentials
+   ```
+
+3. Test it without touching the repository:
+
+   ```bash
+   ./ops/borg-backup.sh --dry-run
+   ```
+
+**Behavior notes:**
+
+- If `~/.notify-credentials` is missing (or either value is empty), notifications are silently skipped and the backup is unaffected.
+- Sending is best-effort (10 second timeout); a Notify! outage never fails or delays a backup.
+- The icon defaults to the Borg logo from [dashboard-icons](https://github.com/homarr-labs/dashboard-icons), served over jsDelivr. Set `NOTIFY_ICON_URL` to change it.
+- To send a manual test message:
+
+  ```bash
+  source ~/.notify-credentials
+  curl -X POST "https://push.getnotifyapp.com/notify-json/$NOTIFY_DEVICE_ID?token=$NOTIFY_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"title": "Test", "text": "Hello from hecate", "iconUrl": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/borg.png"}'
+  ```
+
+> **Disaster recovery:** `~/.notify-credentials` is outside the backed-up repo directory. Keep a copy in your password manager alongside the Borg passphrase if you want notifications working immediately after a rebuild.
 
 ---
 
