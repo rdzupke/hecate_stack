@@ -1,0 +1,34 @@
+services:
+  dockerproxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:latest
+    container_name: homepage-dockerproxy
+    environment:
+      - CONTAINERS=1
+      - SERVICES=0
+      - TASKS=0
+      - POST=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - homepage-internal
+    restart: unless-stopped
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    env_file: .env
+    environment:
+      HOMEPAGE_ALLOWED_HOSTS: zupke.xyz,www.zupke.xyz
+    volumes:
+      - ./config:/app/config
+    networks:
+      - nginx-net
+      - homepage-internal
+    depends_on:
+      - dockerproxy
+    restart: unless-stopped
+
+networks:
+  nginx-net:
+    external: true
+  homepage-internal:

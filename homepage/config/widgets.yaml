@@ -1,0 +1,31 @@
+---
+- resources:
+    cpu: true
+    memory: true
+    disk: /
+    uptime: true
+
+- search:
+    provider: google
+    focus: true
+    showSearchSuggestions: true
+    target: _blank
+
+- datetime:
+    text_size: xl
+    format:
+      dateStyle: short
+      timeStyle: short
+
+- unifi_console:
+    url: https://192.168.0.1
+    username: "{{HOMEPAGE_VAR_UNIFI_USER}}"
+    password: "{{HOMEPAGE_VAR_UNIFI_PASS}}"
+
+- stocks:
+    provider: finnhub
+    color: true
+    cache: 1
+    watchlist:
+      - AAPL
+      - RIVN

@@ -1,0 +1,249 @@
+---
+# Container status dots use the "local" Docker entry in docker.yaml (via dockerproxy).
+# Secrets come from .env as HOMEPAGE_VAR_* (see env.example).
+
+- Family:
+    - Immich:
+        href: https://immich.zupke.xyz
+        description: Family photos
+        icon: immich
+        server: local
+        container: immich_server
+    - Paperless:
+        href: https://paperless.zupke.xyz
+        description: Document management
+        icon: paperless-ngx
+        server: local
+        container: paperless
+        widget:
+          type: paperlessngx
+          url: http://paperless:8000
+          key: "{{HOMEPAGE_VAR_PAPERLESS_KEY}}"
+    - Mealie:
+        href: https://mealie.zupke.xyz
+        description: Recipe management
+        icon: mealie
+        server: local
+        container: mealie
+        widget:
+          type: mealie
+          url: http://mealie:9000
+          key: "{{HOMEPAGE_VAR_MEALIE_KEY}}"
+          version: 3
+    - Grocy:
+        href: https://grocy.zupke.xyz
+        description: Groceries and household inventory
+        icon: grocy
+        server: local
+        container: grocy
+    - Homebox:
+        href: https://homebox.zupke.xyz
+        description: Home inventory
+        icon: homebox
+        server: local
+        container: homebox
+    - Audiobookshelf:
+        href: https://audiobookshelf.zupke.xyz
+        description: Audiobooks and podcasts
+        icon: audiobookshelf
+        server: local
+        container: audiobookshelf
+        widget:
+          type: audiobookshelf
+          url: http://audiobookshelf:80
+          key: "{{HOMEPAGE_VAR_ABS_KEY}}"
+    - Memos:
+        href: https://memos.zupke.xyz
+        description: Quick notes
+        icon: memos
+        server: local
+        container: memos
+    - Linkwarden:
+        href: https://linkwarden.zupke.xyz
+        description: Bookmarks and page saver
+        icon: linkwarden
+        server: local
+        container: linkwarden-linkwarden-1
+    - TubeArchivist:
+        href: https://tubearchivist.zupke.xyz
+        description: YouTube archive
+        icon: si-libretube-#47927f
+        server: local
+        container: tubearchivist
+    - RomM:
+        href: https://romm.zupke.xyz
+        description: ROM library and emulator
+        icon: romm
+        server: local
+        container: romm
+    - Yamtrack:
+        href: https://yamtrack.zupke.xyz
+        description: Media tracker
+        icon: mdi-movie-open-star
+        server: local
+        container: yamtrack
+    - AirTrail:
+        href: https://airtrail.zupke.xyz
+        description: Flight logbook
+        icon: mdi-airplane-edit
+        server: local
+        container: airtrail
+    - LubeLogger:
+        href: https://lubelogger.zupke.xyz
+        description: Vehicle logbook
+        icon: lubelogger
+        server: local
+        container: lubelogger
+    - Pokécollector:
+        href: https://pokecollector.zupke.xyz
+        description: Kids' Pokémon card collection
+        icon: mdi-cards
+        server: local
+        container: pokemon-frontend
+    - Vestaboard:
+        href: https://vestaboard.zupke.xyz
+        description: Vestaboard controller
+        icon: mdi-view-grid
+        server: local
+        container: vestaboard
+    - Whiskers:
+        href: https://whiskers.zupke.xyz
+        description: Whiskers app
+        icon: mdi-cat
+        server: local
+        container: whiskers
+    - Vaultwarden:
+        href: https://vault.zupke.xyz
+        description: Password manager
+        icon: vaultwarden
+        server: local
+        container: vaultwarden
+    - Bambuddy:
+        href: https://bambuddy.zupke.xyz
+        description: Bambu Lab 3D printer manager
+        icon: mdi-printer-3d
+        server: local
+        container: bambuddy
+    - Rivian:
+        href: https://rivian.zupke.xyz/static/report.html
+        description: Rivian charging & odometer report (Datasette)
+        icon: mdi-car-electric
+        server: local
+        container: rivian-datasette
+
+- Media & Network:
+    - Plex:
+        href: https://app.plex.tv
+        description: Media server
+        icon: plex
+        widget:
+          type: plex
+          url: http://192.168.0.228:32400
+          key: "{{HOMEPAGE_VAR_PLEX_KEY}}"
+    - Synology:
+        href: https://synology.zupke.xyz
+        description: Control Center (DS220+)
+        icon: synology-dsm
+    - Synology Drive:
+        href: https://synology.zupke.xyz/drive
+        description: Synology Drive
+        icon: synology-drive
+    - Synology Photos:
+        href: https://synology.zupke.xyz/photos
+        description: Synology Photos
+        icon: synology-photos
+    - File Station:
+        href: https://synology.zupke.xyz/files
+        description: Raw filesystem viewer
+        icon: synology-file-station
+    - Download Station:
+        href: https://synology.zupke.xyz/download
+        description: Synology Download Station
+        icon: synology-download-station
+    - Homebridge:
+        href: https://homebridge.zupke.xyz
+        description: HomeKit bridge
+        icon: homebridge
+    - Tailscale (ds220plus):
+        icon: tailscale
+        description: ds220plus
+        widget:
+          type: tailscale
+          deviceid: niriHnCUqZ11CNTRL
+          key: "{{HOMEPAGE_VAR_TAILSCALE_KEY}}"
+    - Tailscale (hyperion):
+        icon: tailscale
+        description: hyperion
+        widget:
+          type: tailscale
+          deviceid: nE1xTFUXEQ11CNTRL
+          key: "{{HOMEPAGE_VAR_TAILSCALE_KEY}}"
+    - Calendar:
+        widget:
+          type: calendar
+          firstDayInWeek: sunday
+          view: monthly
+          maxEvents: 10
+          showTime: true
+          timezone: America/Los_Angeles
+          integrations:
+            - type: ical
+              url: "{{HOMEPAGE_VAR_ICAL_SCHEDULE_URL}}"
+              name: SVINTL Schedule
+              color: red
+              params:
+                showName: true
+            - type: ical
+              url: "{{HOMEPAGE_VAR_ICAL_EVENTS_URL}}"
+              name: SVINTL Events
+              color: blue
+              params:
+                showName: true
+
+- Admin:
+    - Nginx Proxy Manager:
+        href: https://npm.hecate.zupke.xyz
+        description: Reverse proxy (hecate)
+        icon: nginx-proxy-manager
+        server: local
+        container: nginxpm
+    - NPM (hyperion):
+        href: https://npm-hyperion.zupke.xyz
+        description: Reverse proxy (hyperion)
+        icon: nginx-proxy-manager
+    - Beszel:
+        href: https://beszel.zupke.xyz
+        description: Host and container monitor
+        icon: beszel
+        server: local
+        container: beszel
+    - Uptime Kuma:
+        href: https://uptime.zupke.xyz
+        description: Uptime monitoring
+        icon: uptime-kuma
+        server: local
+        container: uptime-kuma
+    - Termix:
+        href: https://termix.zupke.xyz
+        description: SSH and server manager
+        icon: termix
+        server: local
+        container: termix
+    - Open WebUI:
+        href: https://ai.zupke.xyz
+        description: Local LLM interface
+        icon: open-webui
+        server: local
+        container: open-webui
+    - Syncthing:
+        href: https://syncthing.hecate.zupke.xyz
+        description: File sync
+        icon: syncthing
+        server: local
+        container: syncthing
+    - Stash:
+        href: https://stash.zupke.xyz
+        description: Homebox item ingest
+        icon: mdi-tray-arrow-down
+        server: local
+        container: stash

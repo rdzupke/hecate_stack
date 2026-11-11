@@ -1,0 +1,32 @@
+---
+- News:
+    - ArsTechnica:
+        - abbr: AT
+          href: https://arstechnica.com
+          icon: si-arstechnica-#FF4E00
+
+- Developer:
+    - Github:
+        - abbr: GH
+          href: https://github.com/
+          icon: github
+    - HomePage Icons:
+        - abbr: HP
+          href: https://gethomepage.dev/configs/services/#icons
+          icon: mdi-robbot-happy-outline
+
+- Social:
+    - Reddit:
+        - abbr: RE
+          href: https://reddit.com/
+          icon: reddit
+
+- Entertainment:
+    - Cardle:
+        - abbr: CAR
+          href: https://playcardle.com/
+          icon: mdi-car-select
+    - YouTube:
+        - abbr: YT
+          href: https://youtube.com/
+          icon: youtube

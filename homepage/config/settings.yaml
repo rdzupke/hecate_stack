@@ -1,0 +1,34 @@
+---
+title: Hecate
+theme: dark
+color: slate
+headerStyle: boxed
+statusStyle: dot
+hideVersion: true
+target: _blank
+
+layout:
+  Family:
+    style: row
+    columns: 4
+  Media & Network:
+    style: row
+    columns: 4
+  Admin:
+    style: row
+    columns: 4
+  News:
+    style: row
+    columns: 4
+  Developer:
+    style: row
+    columns: 4
+  Social:
+    style: row
+    columns: 4
+  Entertainment:
+    style: row
+    columns: 4
+
+providers:
+  finnhub: "{{HOMEPAGE_VAR_FINNHUB_KEY}}"
