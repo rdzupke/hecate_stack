@@ -4,3 +4,6 @@
 [submodule "whiskers"]
 	path = whiskers
 	url = git@github.com:rdzupke/whiskers.git
+[submodule "rivian"]
+	path = rivian
+	url = git@github.com:rdzupke/rivian.git
