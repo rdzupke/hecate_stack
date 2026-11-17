@@ -12,6 +12,12 @@ services:
       - ./letsencrypt:/etc/letsencrypt
     networks:
       - nginx-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:81/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   nginx-net:

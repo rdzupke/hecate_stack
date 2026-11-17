@@ -90,6 +90,12 @@ services:
       PUBLIC_MODE: ${PUBLIC_MODE:-false}
     networks:
       - nginx-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres_data:
