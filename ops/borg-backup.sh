@@ -3,15 +3,28 @@
 # borg-backup.sh — recurring backup direct to Hyperion
 # Run after borg-seed.sh + rsync have completed.
 # Schedule via cron.
+#
+# The script runs in two roles. The launcher (what you invoke) checks
+# prerequisites, starts a detached worker, and follows its log. The worker
+# does the backup and keeps running if your connection drops.
 # ─────────────────────────────────────────────
 set -euo pipefail
 
 # ── CLI Arguments ──────────────────────────────
+# --worker and --delay are internal: the launcher passes them to the worker.
 DRY_RUN=false
+WORKER=false
+START_DELAY=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run|-n)
       DRY_RUN=true
+      ;;
+    --worker)
+      WORKER=true
+      ;;
+    --delay=*)
+      START_DELAY="${arg#--delay=}"
       ;;
     --help|-h)
       echo "Usage: $0 [--dry-run|-n]"
@@ -32,6 +45,10 @@ SOURCE_DIR="/Users/rdzupke/git/rdzupke/hecate_stack"
 STACK_ROOT="$SOURCE_DIR"
 ARCHIVE_NAME="hecate-$(date +%Y-%m-%dT%H:%M)"
 BORG_PASSPHRASE_FILE="$HOME/.borg-passphrase"
+LOG_DIR="$HOME/Library/Logs/hecate-backup"   # must stay outside SOURCE_DIR
+LOCK_FILE="$HOME/.hecate-backup.lock"        # symlink whose target is the worker PID
+CLOSE_COUNTDOWN=10   # seconds of warning before closing a relayed session
+CLOSE_GRACE=5        # seconds the worker waits so the close reaches the client
 
 # ── Retention policy ───────────────────────────
 KEEP_DAILY=7
@@ -43,12 +60,12 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 # ── Notify! push notifications ─────────────────
 # Credentials live outside the repo, in a file containing:
-#   NOTIFY_DEVICE_ID=...   (device or GRP group id)
+#   NOTIFY_GROUP_ID=...    (GRP… group id)
 #   NOTIFY_TOKEN=...
 #   NOTIFY_ICON_URL=...    (optional; overrides the default icon below)
 # If the file is missing, notifications are silently skipped.
 NOTIFY_CREDS_FILE="$HOME/.notify-credentials"
-NOTIFY_URL="https://push.getnotifyapp.com/notify-json"
+NOTIFY_URL="https://push.getnotifyapp.com/notify-group"
 NOTIFY_GROUP_TYPE="backups"
 NOTIFY_ICON_URL_DEFAULT="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/borg.png"
 
@@ -60,16 +77,174 @@ notify() {
   (
     # shellcheck disable=SC1090
     source "$NOTIFY_CREDS_FILE"
-    [[ -n "${NOTIFY_DEVICE_ID:-}" && -n "${NOTIFY_TOKEN:-}" ]] || exit 0
-    payload="$(python3 -c 'import json,sys; print(json.dumps({"title": sys.argv[1], "text": sys.argv[2], "groupType": sys.argv[3], "iconUrl": sys.argv[4]}))' \
-      "$title" "$text" "$NOTIFY_GROUP_TYPE" "${NOTIFY_ICON_URL:-$NOTIFY_ICON_URL_DEFAULT}")"
-    curl -fsS --max-time 10 --retry 2 -X POST \
-      -H "Content-Type: application/json" \
-      -d "$payload" \
-      "$NOTIFY_URL/$NOTIFY_DEVICE_ID?token=$NOTIFY_TOKEN" > /dev/null
+    [[ -n "${NOTIFY_GROUP_ID:-}" && -n "${NOTIFY_TOKEN:-}" ]] || exit 0
+    # notify-group takes query parameters (a JSON body is rejected with 400)
+    curl -fsS --max-time 10 --retry 2 -X POST -G \
+      --data-urlencode "token=$NOTIFY_TOKEN" \
+      --data-urlencode "title=$title" \
+      --data-urlencode "body=$text" \
+      --data-urlencode "groupType=$NOTIFY_GROUP_TYPE" \
+      --data-urlencode "iconUrl=${NOTIFY_ICON_URL:-$NOTIFY_ICON_URL_DEFAULT}" \
+      "$NOTIFY_URL/$NOTIFY_GROUP_ID" > /dev/null
   ) || log "  WARNING: failed to send Notify! notification"
   return 0
 }
+
+# ── Lock (one backup at a time) ────────────────
+lock_pid() { readlink "$LOCK_FILE" 2>/dev/null || true; }
+
+backup_running() {
+  local pid
+  pid="$(lock_pid)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# Creating a symlink is atomic. A lock left by a dead process is replaced.
+acquire_lock() {
+  ln -s "$$" "$LOCK_FILE" 2>/dev/null && return 0
+  backup_running && return 1
+  rm -f "$LOCK_FILE"
+  ln -s "$$" "$LOCK_FILE" 2>/dev/null
+}
+
+# ── Launcher ───────────────────────────────────
+# Sets SESSION_TYPE and CLIENT_IP from SSH_CONNECTION. "relayed" means the SSH
+# client is on this host, e.g. a Termix container (seen as 127.0.0.1 on macOS).
+classify_session() {
+  CLIENT_IP=""
+  SESSION_TYPE="local"
+  [[ -n "${SSH_CONNECTION:-}" ]] || return 0
+  local server_ip
+  read -r CLIENT_IP _ server_ip _ <<< "$SSH_CONNECTION"
+  case "$CLIENT_IP" in
+    127.*|::1|::ffff:127.*|"$server_ip") SESSION_TYPE="relayed" ;;
+    100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*|fd7a:115c:a1e0:*) SESSION_TYPE="tailnet" ;;
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|fe80:*) SESSION_TYPE="LAN" ;;
+    *) SESSION_TYPE="other remote" ;;
+  esac
+}
+
+# Prints the PID of this session's login shell: the ancestor whose parent is sshd.
+login_shell_pid() {
+  local pid=$PPID parent
+  while [[ "$pid" -gt 1 ]]; do
+    [[ "$(ps -o comm= -p "$pid")" != *sshd* ]] || return 1
+    parent="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+    [[ -n "$parent" && "$parent" -gt 1 ]] || return 1
+    if [[ "$(ps -o comm= -p "$parent")" == *sshd* ]]; then
+      echo "$pid"
+      return 0
+    fi
+    pid=$parent
+  done
+  return 1
+}
+
+# Catch obvious failures while the user can still see them.
+preflight() {
+  if [[ "$DRY_RUN" == "false" ]]; then
+    if [[ ! -f "$BORG_PASSPHRASE_FILE" ]]; then
+      PREFLIGHT_ERROR="Passphrase file not found at $BORG_PASSPHRASE_FILE"
+      return 1
+    fi
+    if ! command -v borg > /dev/null 2>&1; then
+      PREFLIGHT_ERROR="borg is not on PATH"
+      return 1
+    fi
+  fi
+  if ! docker info > /dev/null 2>&1; then
+    PREFLIGHT_ERROR="Docker Desktop is not running"
+    return 1
+  fi
+}
+
+warn_and_count_down() {
+  local log_file=$1 i
+  log "WARNING: this SSH session is relayed through this host (client $CLIENT_IP), e.g. by Termix."
+  log "The backup stops the containers that carry it, so this session will be closed first."
+  log "Termix will be unavailable until the stacks restart, and other Termix terminals will drop."
+  log "The backup keeps running. After reconnecting, follow it with:"
+  log "  tail -f \"$log_file\""
+  log "Press Ctrl-C to cancel."
+  trap 'echo; log "Cancelled. Nothing was changed."; exit 130' INT
+  for (( i = CLOSE_COUNTDOWN; i > 0; i-- )); do
+    printf '\r  Closing this session in %2d seconds... ' "$i"
+    sleep 1
+  done
+  echo
+  trap - INT
+}
+
+launch() {
+  classify_session
+  log "Connection: $SESSION_TYPE${CLIENT_IP:+ (client $CLIENT_IP)}"
+
+  if backup_running; then
+    log "ERROR: a backup is already running (PID $(lock_pid)). Logs are in $LOG_DIR"
+    exit 1
+  fi
+  if ! preflight; then
+    log "ERROR: $PREFLIGHT_ERROR. Exiting."
+    notify "Hecate backup FAILED" "Preflight: $PREFLIGHT_ERROR."
+    exit 1
+  fi
+
+  mkdir -p "$LOG_DIR"
+  local log_file
+  log_file="$LOG_DIR/backup-$(date +%Y%m%d-%H%M%S).log"
+
+  local close_pid="" delay=0
+  if [[ "$SESSION_TYPE" == "relayed" && -t 0 && -t 1 ]]; then
+    if [[ -n "${TMUX:-}${STY:-}" ]]; then
+      log "Inside tmux/screen, so this session will not be closed."
+    elif close_pid="$(login_shell_pid)"; then
+      warn_and_count_down "$log_file"
+      delay=$CLOSE_GRACE
+    else
+      log "Could not identify the login shell, so this session will not be closed."
+    fi
+  fi
+
+  local worker_args=(--worker "--delay=$delay")
+  [[ "$DRY_RUN" == "true" ]] && worker_args+=(--dry-run)
+
+  # set -m gives the worker its own process group, so Ctrl-C and hangups here
+  # do not reach it; nohup covers SIGHUP as well.
+  set -m
+  nohup "$BASH" "$0" "${worker_args[@]}" < /dev/null > "$log_file" 2>&1 &
+  local worker_pid=$!
+  set +m
+  ln -sfn "$log_file" "$LOG_DIR/latest.log"
+
+  log "Backup running in the background (PID $worker_pid). Log: $log_file"
+
+  if [[ -n "$close_pid" ]]; then
+    sleep 1
+    # Only close the session if the worker survived startup.
+    if kill -0 "$worker_pid" 2>/dev/null; then
+      log "Closing this session now."
+      kill -HUP "$close_pid"
+      exit 0
+    fi
+    log "The backup exited early, so this session stays open."
+  fi
+
+  log "Following the log. Ctrl-C stops following only; to abort: kill -TERM -- -$worker_pid"
+  tail -n +1 -f "$log_file" &
+  local tail_pid=$! rc=0
+  # shellcheck disable=SC2064
+  trap "kill $tail_pid 2>/dev/null; echo; log 'Stopped following. The backup is still running.'; exit 130" INT
+  wait "$worker_pid" || rc=$?
+  sleep 1   # let tail print the last lines
+  kill "$tail_pid" 2>/dev/null || true
+  exit "$rc"
+}
+
+if [[ "$WORKER" == "false" ]]; then
+  launch
+fi
+
+# ═══════════════ Worker from here on ═════════════
 
 # ── Exit handling: restart stacks + report failure ──
 # Runs on every exit (success or failure). Stacks are always restarted;
@@ -99,9 +274,22 @@ on_exit() {
     fi
     notify "Hecate backup FAILED" "$msg"
   fi
+  [[ "$(lock_pid)" == "$$" ]] && rm -f "$LOCK_FILE"
   exit $rc
 }
+
+if ! acquire_lock; then
+  log "ERROR: a backup is already running (PID $(lock_pid)). Exiting."
+  exit 1
+fi
 trap on_exit EXIT
+# Make interruptions exit non-zero, so on_exit reports them as failures.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+log "Worker PID $$. To abort: kill -TERM -- -$$"
+sleep "$START_DELAY"
 
 notify "Hecate backup started" "Archive $ARCHIVE_NAME"
 
@@ -112,21 +300,12 @@ fi
 
 # ── Borg Environment Setup ─────────────────────
 if [[ "$DRY_RUN" == "false" ]]; then
-  if [[ ! -f "$BORG_PASSPHRASE_FILE" ]]; then
-    log "ERROR: Passphrase file not found at $BORG_PASSPHRASE_FILE"
-    exit 1
-  fi
   export BORG_PASSPHRASE
   BORG_PASSPHRASE="$(cat "$BORG_PASSPHRASE_FILE")"
-  export BORG_RSH="ssh -i $HOME/.ssh/borg_backup_key"
+  # BatchMode: the worker has no terminal, so ssh must fail rather than prompt.
+  export BORG_RSH="ssh -i $HOME/.ssh/borg_backup_key -o BatchMode=yes"
   export BORG_REMOTE_PATH="/opt/homebrew/bin/borg"
   export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
-fi
-
-# ── Docker Desktop check ───────────────────────
-if ! docker info > /dev/null 2>&1; then
-  log "ERROR: Docker Desktop is not running. Exiting."
-  exit 1
 fi
 
 # ── Running stacks discovery ───────────────────
@@ -229,8 +408,9 @@ if [[ ${#RUNNING_STACKS[@]} -gt 0 ]]; then
   CURRENT_STEP="stopping stacks"
   log "Stopping running stacks..."
   for name in "${RUNNING_STACKS[@]}"; do
-    stack_down "$name"
+    # Recorded first, so an interrupted or partial stop is still restarted.
     STACKS_STOPPED+=("$name")
+    stack_down "$name"
   done
 fi
 

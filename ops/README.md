@@ -67,12 +67,12 @@ export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
 
 **Setup:**
 
-1. Install Notify! on your iPhone and note your **device ID** (or a `GRP…` group ID to notify several devices) and **token**. Bambuddy's Notify provider settings use the same values.
+1. Install Notify! on your iPhone and note your **group ID** (`GRP…`, which notifies every device in the group) and **token**.
 2. Create `~/.notify-credentials` on the host that runs the backup. This file lives **outside the repo** and must never be committed:
 
    ```bash
    cat > ~/.notify-credentials <<'EOF'
-   NOTIFY_DEVICE_ID=your-device-or-group-id
+   NOTIFY_GROUP_ID=your-group-id
    NOTIFY_TOKEN=your-token
    # Optional: override the notification icon (any public PNG URL)
    # NOTIFY_ICON_URL=https://example.com/icon.png
@@ -95,12 +95,35 @@ export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
 
   ```bash
   source ~/.notify-credentials
-  curl -X POST "https://push.getnotifyapp.com/notify-json/$NOTIFY_DEVICE_ID?token=$NOTIFY_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"title": "Test", "text": "Hello from hecate", "iconUrl": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/borg.png"}'
+  curl -X POST -G "https://push.getnotifyapp.com/notify-group/$NOTIFY_GROUP_ID" \
+    --data-urlencode "token=$NOTIFY_TOKEN" \
+    --data-urlencode "title=Test" \
+    --data-urlencode "body=Hello from hecate" \
+    --data-urlencode "iconUrl=https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/borg.png"
   ```
 
 > **Disaster recovery:** `~/.notify-credentials` is outside the backed-up repo directory. Keep a copy in your password manager alongside the Borg passphrase if you want notifications working immediately after a rebuild.
+
+### D. Running a Backup Over a Remote Connection
+
+`borg-backup.sh` starts the backup as a detached background process and follows its log, so a dropped connection does not interrupt it. Only one backup can run at a time.
+
+| Connection (from `$SSH_CONNECTION`) | Behavior |
+|---|---|
+| LAN, tailnet, local terminal, cron | Follows the log until the backup finishes and returns its exit code |
+| Relayed through this host (client is loopback or the server's own IP, e.g. Termix) | Warns, counts down 10 seconds (Ctrl-C cancels), starts the backup, then closes the SSH session |
+
+A relayed session inside `tmux` or `screen` is not closed.
+
+```bash
+# Follow the current or most recent run (for example after reconnecting)
+tail -f ~/Library/Logs/hecate-backup/latest.log
+
+# Abort a running backup; stopped stacks are restarted and a failure notification is sent
+kill -TERM -- -"$(readlink ~/.hecate-backup.lock)"
+```
+
+Ctrl-C while following the log stops only the log view. Use the `kill` command above to abort.
 
 ---
 
