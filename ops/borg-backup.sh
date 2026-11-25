@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────
 # borg-backup.sh — recurring backup direct to Hyperion
 # Run after borg-seed.sh + rsync have completed.
-# Schedule via cron.
+# Scheduled with launchd: xyz.zupke.borg-backup.plist (see README.md).
 #
 # The script runs in two roles. The launcher (what you invoke) checks
 # prerequisites, starts a detached worker, and follows its log. The worker
@@ -63,6 +63,7 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 #   NOTIFY_GROUP_ID=...    (GRP… group id)
 #   NOTIFY_TOKEN=...
 #   NOTIFY_ICON_URL=...    (optional; overrides the default icon below)
+#   HECATE_BACKUP_BEACON_URL=...  (optional; heartbeat pinged after a successful backup)
 # If the file is missing, notifications are silently skipped.
 NOTIFY_CREDS_FILE="$HOME/.notify-credentials"
 NOTIFY_URL="https://push.getnotifyapp.com/notify-group"
@@ -88,6 +89,32 @@ notify() {
       "$NOTIFY_URL/$NOTIFY_GROUP_ID" > /dev/null
   ) || log "  WARNING: failed to send Notify! notification"
   return 0
+}
+
+# ping_beacon — tells the Notify! beacon a backup succeeded. The beacon alerts
+# when pings stop arriving. Best-effort, and skipped on dry runs.
+ping_beacon() {
+  [[ "$DRY_RUN" == "false" && -f "$NOTIFY_CREDS_FILE" ]] || return 0
+  (
+    # shellcheck disable=SC1090
+    source "$NOTIFY_CREDS_FILE"
+    [[ -n "${HECATE_BACKUP_BEACON_URL:-}" ]] || exit 0
+    curl -fsS --max-time 10 --retry 3 "$HECATE_BACKUP_BEACON_URL" > /dev/null
+  ) || log "  WARNING: failed to ping the Notify! beacon"
+  return 0
+}
+
+# ── Borg environment ───────────────────────────
+setup_borg_env() {
+  export BORG_PASSPHRASE
+  BORG_PASSPHRASE="$(cat "$BORG_PASSPHRASE_FILE")" || return 1
+  # BatchMode: ssh must fail rather than prompt (the worker has no terminal).
+  # ConnectTimeout: fail promptly when Hyperion is offline.
+  export BORG_RSH="ssh -i $HOME/.ssh/borg_backup_key -o BatchMode=yes -o ConnectTimeout=15"
+  export BORG_REMOTE_PATH="/opt/homebrew/bin/borg"
+  export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+  # Exit status 1 = warnings, 2 and up = errors (check_borg_status relies on it).
+  export BORG_EXIT_CODES=legacy
 }
 
 # ── Lock (one backup at a time) ────────────────
@@ -140,7 +167,19 @@ login_shell_pid() {
   return 1
 }
 
-# Catch obvious failures while the user can still see them.
+# Confirms Hyperion is reachable and the repo opens, using a read-only listing.
+# Runs in a subshell so the passphrase stays out of the launcher's environment.
+check_repo() {
+  local output
+  if ! output="$(setup_borg_env && borg list --last 1 "$REMOTE_REPO" 2>&1 < /dev/null)"; then
+    echo "$output" >&2
+    PREFLIGHT_ERROR="Cannot open the Borg repository: $(tail -n 1 <<< "$output")"
+    return 1
+  fi
+}
+
+# Catch obvious failures while the user can still see them, and before any
+# stack is stopped.
 preflight() {
   if [[ "$DRY_RUN" == "false" ]]; then
     if [[ ! -f "$BORG_PASSPHRASE_FILE" ]]; then
@@ -155,6 +194,11 @@ preflight() {
   if ! docker info > /dev/null 2>&1; then
     PREFLIGHT_ERROR="Docker Desktop is not running"
     return 1
+  fi
+  # Last, because it is the only check that needs the network.
+  if [[ "$DRY_RUN" == "false" ]]; then
+    log "Checking the Borg repository..."
+    check_repo || return 1
   fi
 }
 
@@ -300,12 +344,7 @@ fi
 
 # ── Borg Environment Setup ─────────────────────
 if [[ "$DRY_RUN" == "false" ]]; then
-  export BORG_PASSPHRASE
-  BORG_PASSPHRASE="$(cat "$BORG_PASSPHRASE_FILE")"
-  # BatchMode: the worker has no terminal, so ssh must fail rather than prompt.
-  export BORG_RSH="ssh -i $HOME/.ssh/borg_backup_key -o BatchMode=yes"
-  export BORG_REMOTE_PATH="/opt/homebrew/bin/borg"
-  export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+  setup_borg_env
 fi
 
 # ── Running stacks discovery ───────────────────
@@ -383,6 +422,18 @@ stack_up() {
   fi
 }
 
+# ── Borg exit status ───────────────────────────
+# check_borg_status <step> <status> — status 1 means the step finished with
+# warnings, which is recorded and tolerated. Anything higher aborts the backup.
+WARNING_STEPS=""
+check_borg_status() {
+  local step=$1 status=$2
+  [[ "$status" -ne 0 ]] || return 0
+  [[ "$status" -eq 1 ]] || exit "$status"
+  log "  WARNING: $step finished with warnings."
+  WARNING_STEPS="${WARNING_STEPS:+$WARNING_STEPS, }$step"
+}
+
 # ── Discover active stacks ─────────────────────
 CURRENT_STEP="discovering running stacks"
 log "Detecting currently running stacks..."
@@ -430,18 +481,25 @@ else
   CURRENT_STEP="borg create"
   log "Creating remote archive $ARCHIVE_NAME..."
   BORG_LOG="$(mktemp)"
+  BORG_STATUS=0
   borg create \
     --compression zstd,3 \
     --stats \
     --filter AME \
     "$REMOTE_REPO::$ARCHIVE_NAME" \
-    "$SOURCE_DIR" 2>&1 | tee "$BORG_LOG"
+    "$SOURCE_DIR" 2>&1 | tee "$BORG_LOG" || BORG_STATUS=$?
 
   # "This archive:  <orig>  <compressed>  <dedup>" line from --stats
   ARCHIVE_STATS="$(grep -E '^This archive:' "$BORG_LOG" | head -1 | sed -E 's/ +/ /g' || true)"
+  # Borg reports problem files above the --stats block. Keep the first few.
+  CREATE_WARNINGS=""
+  if [[ "$BORG_STATUS" -eq 1 ]]; then
+    CREATE_WARNINGS="$(awk '/^----------/ { exit } NF { print substr($0, 1, 200); if (++n == 3) exit }' "$BORG_LOG" || true)"
+  fi
   rm -f "$BORG_LOG"
 
-  log "Archive created successfully."
+  check_borg_status "borg create" "$BORG_STATUS"
+  log "Archive created."
 fi
 
 # ── Restart previously running stacks ──────────
@@ -462,17 +520,29 @@ if [[ "$DRY_RUN" == "true" ]]; then
 else
   CURRENT_STEP="borg prune (archive was created, stacks restarted)"
   log "Pruning old archives..."
+  BORG_STATUS=0
   borg prune \
     --keep-daily="$KEEP_DAILY" \
     --keep-weekly="$KEEP_WEEKLY" \
     --keep-monthly="$KEEP_MONTHLY" \
     --list \
-    "$REMOTE_REPO"
+    "$REMOTE_REPO" || BORG_STATUS=$?
+  check_borg_status "borg prune" "$BORG_STATUS"
 
   CURRENT_STEP="borg compact (archive was created, stacks restarted)"
   log "Compacting repo..."
-  borg compact "$REMOTE_REPO"
+  BORG_STATUS=0
+  borg compact "$REMOTE_REPO" || BORG_STATUS=$?
+  check_borg_status "borg compact" "$BORG_STATUS"
 
-  log "Backup complete."
-  notify "Hecate backup complete" "$ARCHIVE_NAME in $(( SECONDS - START_SECONDS ))s. ${#RUNNING_STACKS[@]} stack(s) restarted. ${ARCHIVE_STATS:-No stats available}"
+  SUMMARY="$ARCHIVE_NAME in $(( SECONDS - START_SECONDS ))s. ${#RUNNING_STACKS[@]} stack(s) restarted."
+  if [[ -n "$WARNING_STEPS" ]]; then
+    log "Backup completed with warnings from: $WARNING_STEPS."
+    notify "Hecate backup completed with WARNINGS" "$SUMMARY Warnings from: $WARNING_STEPS. See $LOG_DIR/latest.log${CREATE_WARNINGS:+
+$CREATE_WARNINGS}"
+  else
+    log "Backup complete."
+    notify "Hecate backup complete" "$SUMMARY ${ARCHIVE_STATS:-No stats available}"
+  fi
+  ping_beacon
 fi

@@ -63,7 +63,7 @@ export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
 
 ### C. Configure Push Notifications (Notify!)
 
-`borg-backup.sh` sends iPhone push notifications through [Notify!](https://getnotifyapp.com) when a backup **starts**, **completes** (with duration and archive size stats), or **fails** (with the step that failed and whether stacks were restarted). `--dry-run` sends the same messages prefixed with `[DRY RUN]`, which makes it a safe way to test.
+`borg-backup.sh` sends iPhone push notifications through [Notify!](https://getnotifyapp.com) when a backup **starts**, **completes** (with duration and archive size stats), **completes with warnings**, or **fails** (with the step that failed and whether stacks were restarted). `--dry-run` sends the same messages prefixed with `[DRY RUN]`, which makes it a safe way to test.
 
 **Setup:**
 
@@ -74,6 +74,8 @@ export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
    cat > ~/.notify-credentials <<'EOF'
    NOTIFY_GROUP_ID=your-group-id
    NOTIFY_TOKEN=your-token
+   # Optional: heartbeat URL, see "Missed-backup alerts" below
+   # HECATE_BACKUP_BEACON_URL="https://push.getnotifyapp.com/ping/..."
    # Optional: override the notification icon (any public PNG URL)
    # NOTIFY_ICON_URL=https://example.com/icon.png
    EOF
@@ -102,15 +104,24 @@ export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
     --data-urlencode "iconUrl=https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/borg.png"
   ```
 
+**Missed-backup alerts (Beacon):** the messages above only arrive if the script runs. A Notify! [Beacon](https://getnotifyapp.com/apidocs/) alerts when a successful backup has not checked in, for example when the Mac is off or waiting for login, the schedule is not loaded, or a run hangs.
+
+1. In the app, open **Devices > Beacons** and create a beacon with a 24 hour interval and a 3 hour grace period, targeting your notification group.
+2. Add its ping URL to `~/.notify-credentials` as `HECATE_BACKUP_BEACON_URL`. The URL contains a token.
+
+The script pings it after every successful backup, including one with warnings. Dry runs and failed runs do not ping. Pause the beacon in the app if you disable the schedule.
+
 > **Disaster recovery:** `~/.notify-credentials` is outside the backed-up repo directory. Keep a copy in your password manager alongside the Borg passphrase if you want notifications working immediately after a rebuild.
 
 ### D. Running a Backup Over a Remote Connection
 
 `borg-backup.sh` starts the backup as a detached background process and follows its log, so a dropped connection does not interrupt it. Only one backup can run at a time.
 
+Before stopping any stack, it checks the passphrase file, `borg`, Docker, and that the repository on Hyperion opens. If a check fails, it sends a failure notification and exits with the stacks still running. `--dry-run` checks only Docker.
+
 | Connection (from `$SSH_CONNECTION`) | Behavior |
 |---|---|
-| LAN, tailnet, local terminal, cron | Follows the log until the backup finishes and returns its exit code |
+| LAN, tailnet, local terminal, launchd, cron | Follows the log until the backup finishes and returns its exit code |
 | Relayed through this host (client is loopback or the server's own IP, e.g. Termix) | Warns, counts down 10 seconds (Ctrl-C cancels), starts the backup, then closes the SSH session |
 
 A relayed session inside `tmux` or `screen` is not closed.
@@ -124,6 +135,28 @@ kill -TERM -- -"$(readlink ~/.hecate-backup.lock)"
 ```
 
 Ctrl-C while following the log stops only the log view. Use the `kill` command above to abort.
+
+### E. Warnings
+
+Borg exits with status 1 when a step finishes with warnings, such as a file that could not be read or that changed during the backup. The script restarts the stacks, continues to prune and compact, and sends **"Hecate backup completed with WARNINGS"** with the first few lines from `borg create`. Check these: an affected file may be missing or incomplete in that archive, and older archives holding a good copy are eventually pruned. Status 2 or higher is a failure.
+
+### F. Daily Schedule (launchd)
+
+[`xyz.zupke.borg-backup.plist`](xyz.zupke.borg-backup.plist) runs the backup daily at 3:00 AM as a LaunchAgent, so it needs a logged-in user session (as Docker Desktop does). A run missed during sleep starts on wake. A run missed while powered off or logged out is skipped.
+
+```bash
+# Install (from the repo root)
+cp ops/xyz.zupke.borg-backup.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.zupke.borg-backup.plist
+
+# Run now through launchd (a real backup: stops running stacks)
+launchctl kickstart gui/$(id -u)/xyz.zupke.borg-backup
+
+# Remove
+launchctl bootout gui/$(id -u)/xyz.zupke.borg-backup
+```
+
+After editing the plist, remove the agent, copy the file again, and bootstrap it. Output from the launcher goes to `~/Library/Logs/hecate-backup-launchd.log`; each run's log is in `~/Library/Logs/hecate-backup/`.
 
 ---
 
