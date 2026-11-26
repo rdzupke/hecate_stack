@@ -2,17 +2,15 @@ services:
   tubearchivist:
     container_name: tubearchivist
     restart: unless-stopped
-    image: bbilly1/tubearchivist
-    #ports:
-    #  - 8000:8000
+    image: bbilly1/tubearchivist:v0.6.0
+    ports:
+      - "127.0.0.1:8010:8000" # local-only access for Plex, which runs on this host
     volumes:
       - ./media:/youtube
       - ./cache:/cache
     environment:
       - ES_URL=http://archivist-es:9200     # needs protocol e.g. http and port
       - REDIS_CON=redis://archivist-redis:6379
-      - HOST_UID=1000
-      - HOST_GID=1000
       - TA_HOST=https://tubearchivist.zupke.xyz  # set your host name with protocol and port
       - TA_USERNAME=${USERNAME}                  # your initial TA credentials
       - TA_PASSWORD=${PASSWORD}                  # your initial TA credentials
@@ -31,7 +29,7 @@ services:
       - archivist-es
       - archivist-redis
   archivist-redis:
-    image: redis
+    image: redis:8.12.0
     container_name: archivist-redis
     restart: unless-stopped
     expose:
@@ -43,8 +41,8 @@ services:
     depends_on:
       - archivist-es
   archivist-es:
-    #image: bbilly1/tubearchivist-es         # only for amd64, or use official es 8.18.2
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.7 #use version 8, and the official image for arm64 support
+    #image: bbilly1/tubearchivist-es         # only for amd64, or use official es 9.5.5
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5 #use version 9, and the official image for arm64 support
     container_name: archivist-es
     restart: unless-stopped
     environment:
